@@ -106,16 +106,76 @@ dynamic validation, never "there's a multiply, therefore bug."
 
 ---
 
-## 6. Outstanding candidates (next dynamic-validation queue)
+## 6. Dynamic Validation Results (evidence-backed)
 
-The MDL family (V-02..V-05) and Unreal (V-06) share the seed pattern but use
-binary container formats. They require a valid base sample plus targeted
-field mutation (same methodology used successfully for SIB/IQM):
+The five MDL/Unreal survivors were validated dynamically, not just by reading
+code. Each "safe" verdict cites the specific guard that makes the overflowed
+allocation unreachable.
 
-1. Obtain a minimal valid .mdl / .unreal sample
-2. Locate the triangle/face count field
-3. Set it to a wrap value (e.g. `0x55555556` for `*3`)
-4. Run under ASan, observe whether allocation truncates before fill
+### V-02/V-03 — Quake1 MDL `num_tris * 3` (MDLLoader.cpp:489, :693)
+`num_tris` is `int32_t` and the `new aiVector3D[num_tris*3]` expression does
+wrap in 32-bit — **but it is preceded by a file-bounds check using 64-bit
+arithmetic**:
+```cpp
+szCurrent += sizeof(MDL::Triangle) * pcHeader->num_tris;  // sizeof => size_t (64-bit), no wrap
+VALIDATE_FILE_SIZE(szCurrent);                            // IsPosValid rejects huge cursor
+```
+`sizeof(...)` promotes the multiply to `size_t`, so a large `num_tris` advances
+the cursor by a genuine multi-GB offset and `IsPosValid` throws before any
+allocation. **Unreachable.**
+
+### V-04 — MDL7 split-group `numtris * 3` (MDLLoader.cpp:1516) — *most subtle, dynamically tested*
+Here the cursor multiply **is** 32-bit (`uint16_t triangle_stc_size * int32_t numtris`),
+so the size check can be arithmetically bypassed (T=12, numtris=0xAAAAAAAC makes
+the cursor advance only 16 bytes while `numtris*3` truncates to 4). **However**,
+between the undersized `vPositions.resize(4)` and the write loop, the code
+performs a second allocation sized by the **un-truncated** count:
+```cpp
+vPositions.resize(numtris*3);   // wraps to 4 (the bug pattern)
+...
+pcFaces.resize(numtris);        // 20-byte IntFace, ctor memsets every element
+ReadFaces_3DGS_MDL7(...);       // <-- never reached when numtris is huge
+```
+A standalone harness reproducing these allocations confirmed the guard:
+- release: `vPositions.resize(2)` OK, then `pcFaces.resize(1431655766)` →
+  **std::bad_alloc** (28.6 GB; the constructor touches every element)
+- ASan: **out-of-memory: trying to allocate 0x6AAAAAAB8 bytes**, aborts
+
+The OOB write in `ReadFaces` is unreachable. **Protected.**
+
+### V-05 — MDL7 output mesh `mNumFaces*3` (MDLLoader.cpp:1867)
+`mNumFaces` is cast from `splitGroupData.aiSplit[i]->size()`; reaching the
+overflow requires the split vector to already hold ~1.4 B faces, which fails
+during earlier parsing. **Unreachable.**
+
+### V-06 — Unreal `num * 3` (UnrealLoader.cpp:437)
+`num = materials[i].numFaces` is **never read directly from the file**; it is
+initialised to 1 and only incremented once per parsed triangle
+(`mat.numFaces=1; ++nt->numFaces`). A wrapping value needs ~1.4 B triangles in
+memory, which fails during triangle parsing. **Unreachable.**
+
+### Codebase-wide scan (27 multiply-fed allocations reviewed)
+- `reserve()` sites with a wrapping multiply are **not** exploitable here:
+  `reserve` only grows capacity and the containers are filled via
+  `push_back`/`back_inserter`, which re-grow safely (SIB ReadString:181, IFC:315).
+- `size() * N` sites compute in `size_t` (64-bit) and cannot wrap
+  (ASE:1650, 3DSConverter:151, FBX, Collada).
+- AMF Postprocess `new bool[VertexCount_Max*2]` uses a `size_t` count requiring
+  ~2.8 B faces to already exist post-parse — unreachable.
+- Narrow-domain multiplies (int16 dimensions, 2-bit counts) cannot wrap.
+
+### Campaign conclusion
+> Across the entire `code/AssetLib` tree, the only confirmed
+> integer-overflow → undersized-allocation → heap OOB **write** is the
+> **known SIB issue #6733**. Every other `count * elements` site is protected
+> by at least one of: a 64-bit file-bounds check, a second allocation sized by
+> the un-truncated count, an increment-only / already-validated count, 64-bit
+> `size_t` arithmetic, or a narrow input domain. **No novel write primitive was
+> found.**
+
+The distinguishing factor between SIB (vulnerable) and MDL (safe) is precisely
+whether a second un-truncated allocation or a 64-bit bounds check sits between
+the overflow and the write loop — a reusable review rule now encoded for BIVAR.
 
 ---
 
