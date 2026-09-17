@@ -1,12 +1,12 @@
 # OpenWrt ARMv7 Firmware Recon
 
-> 真实ARM固件逆向工程Recon阶段 — 从SquashFS到攻击面分析
+> 真实ARM固件逆向工程Recon阶段 — 从SquashFS到攻击面分析到QEMU运行
 
 ---
 
 ## 📋 Recon概览
 
-这是一个真实ARM固件逆向工程的Recon阶段：
+这是一个完整的真实ARM固件逆向工程案例：
 
 1. **Firmware Download** — OpenWrt ARMv7 rootfs
 2. **Filesystem Extraction** — SquashFS 4.0
@@ -14,6 +14,7 @@
 4. **Startup Services** — 启动脚本分析
 5. **Attack Surface** — 网络服务和攻击面识别
 6. **Target Binary** — uhttpd Web服务器分析
+7. **QEMU Dynamic Run** — 成功在QEMU中运行
 
 ---
 
@@ -97,17 +98,23 @@ Stripped: yes (no section header)
 SHA256: a17979568fc353b85435852759253fe7debed4ea46e7fa65646b52a5112ad93f
 ```
 
+### 依赖库
+- libubox.so
+- libjson_script.so
+- libblobmsg_json.so
+- libjson-c.so
+
+### 插件
+- **uhttpd_ubus.so** — JSON-RPC/UBUS插件（独立.so文件）
+
 ### Interesting Strings
 
 #### HTTP方法
 - `POST`
-- `GET`（隐含在HTTP处理中）
 
 #### CGI处理
 - `/cgi-bin` — CGI脚本路径
 - `CGI/1.1` — CGI协议版本
-- `Failed to create CGI process`
-- `Unable to launch the requested CGI program`
 
 #### 认证
 - `Authorization Required`
@@ -115,11 +122,8 @@ SHA256: a17979568fc353b85435852759253fe7debed4ea46e7fa65646b52a5112ad93f
 - `HTTP_AUTHORIZATION`
 - `HTTP_AUTH_USER`
 - `HTTP_AUTH_PASS`
-- `http-auth-user`
-- `http-auth-pass`
 
 #### UBUS集成
-- `Do not authenticate JSON-RPC requests against UBUS session api`
 - `JSON-RPC`
 
 ### Attack Surface
@@ -134,9 +138,33 @@ HTTP Request Parser
 认证检查 (Basic Auth / UBUS session)
     ↓
 URL路由
-    ├── CGI Handler (/cgi-bin)
-    ├── JSON-RPC (UBUS)
+    ├── CGI Handler (/cgi-bin) — 主程序内建
+    ├── JSON-RPC (/ubus) — uhttpd_ubus.so插件
     └── Static Files (www/)
+```
+
+---
+
+## 🚀 QEMU动态运行验证
+
+### 运行环境
+```bash
+qemu-arm-static -L . usr/sbin/uhttpd -f -p 127.0.0.1:8080 -h /www
+```
+
+### 验证结果
+- ✅ uhttpd在QEMU ARM模拟中成功运行
+- ✅ HTTP服务器正常监听
+- ✅ curl成功连接
+- ✅ 返回HTTP 404响应（说明请求处理链路正常）
+
+### 命令行选项（从help输出）
+```
+-p [addr:]port  Bind to specified address and port
+-h directory    Specify the document root
+-x string       URL prefix for CGI handler, default is '/cgi-bin'
+-u string       URL prefix for UBUS via JSON-RPC handler
+-f              Do not fork to background
 ```
 
 ---
@@ -144,9 +172,9 @@ URL路由
 ## 🔍 潜在攻击点
 
 1. **HTTP Request Parser** — 请求解析
-2. **CGI Handler** — CGI脚本启动
+2. **CGI Handler** — CGI脚本启动（主程序内建）
 3. **认证逻辑** — Basic Auth / UBUS session
-4. **JSON-RPC** — UBUS RPC调用
+4. **JSON-RPC** — UBUS RPC调用（uhttpd_ubus.so插件）
 5. **URL路由** — 路径遍历
 
 ---
@@ -166,12 +194,12 @@ openwrt-armv7/
 
 ## 🎓 下一步
 
-1. **QEMU用户模式模拟** — 运行uhttpd
-2. **GDB动态调试** — 跟踪HTTP请求处理
-3. **静态分析** — Ghidra逆向uhttpd
+1. **Ghidra静态分析** — 完整逆向uhttpd
+2. **/cgi-bin调用链恢复** — 从URL到CGI执行
+3. **GDB动态调试** — 跟踪HTTP请求处理
 4. **Fuzzing** — HTTP parser fuzzing
 5. **漏洞挖掘** — 找真实漏洞
 
 ---
 
-*This is an ARM firmware reconnaissance case study on OpenWrt ARMv7 rootfs.*
+*This is an ARM firmware reconnaissance and dynamic analysis case study on OpenWrt ARMv7 rootfs.*
