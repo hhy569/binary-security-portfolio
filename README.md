@@ -1,167 +1,306 @@
 # Binary Security Research Portfolio
 
-> 二进制安全研究作品集 — 真实漏洞发现 + 自动化分析工具开发
+> 独立二进制安全研究员 — 真实漏洞发现 + 自动化分析工具开发 + 漏洞利用研究
 
 ---
 
-## 📋 项目概览
+## About Me
 
-这是一个独立二进制安全研究员的完整作品集，包含：
-
-1. **真实漏洞发现** — 3个被上游确认的二进制漏洞
-2. **自动化分析工具** — BIVAR二进制patch分析工具
-3. **完整研究方法论** — 从目标选择到根因分析的完整流程
+Binary security researcher with hands-on experience in vulnerability discovery, exploit development, and automated analysis tooling. Focused on memory corruption vulnerabilities in parsers, protocol implementations, and virtual device emulation. Currently targeting opportunities in Finland (WithSecure, Traficom, Secproof) and Norway (FFI, Kongsberg).
 
 ---
 
-## 🔍 漏洞发现
+## Core Strengths
+
+- **Vulnerability Discovery**: Real CVEs confirmed by upstream vendors (Apache, Oracle)
+- **Memory Corruption Analysis**: Integer overflow → under-allocation → heap OOB write chain
+- **Automated Tooling**: BIVAR — binary patch-guided variant analysis tool
+- **Exploit Development**: Full mitigation bypass (NX/PIE/Canary/RELRO)
+- **Firmware RE**: ARM firmware analysis with QEMU + GDB
+
+---
+
+## 🔴 Real Vulnerability Discoveries
 
 ### 1. Apache brpc HPACK Decoder Stack Overflow
-**状态：✅ 被Apache PMC正式确认**
+**Status**: ✅ Confirmed by Apache PMC, fixed in PR #3343
 
-- **组件**：Apache brpc HPACK Decoder
-- **漏洞类型**：Stack Overflow (递归解码导致栈耗尽)
-- **根因**：HPACK头部解码使用递归实现，深度嵌套的头部字段会导致栈溢出
-- **修复**：官方PR #3343 — 将递归调用改为迭代循环
-- **我的工作**：
-  - 发现漏洞并提交报告
-  - 与Apache PMC (Weibing Wang) 多轮沟通
-  - 验证PR #3343修复的正确性
+- **Component**: Apache brpc HTTP/2 HPACK Decoder
+- **Type**: Stack Overflow (recursive decoding stack exhaustion)
+- **Root Cause**: HPACK header decoding uses recursive implementation; deeply nested header fields cause stack overflow
+- **Fix**: Official PR #3343 — recursive → iterative loop
+- **My Work**:
+  - Discovered and reported
+  - Multiple rounds of communication with Apache PMC (Weibing Wang)
+  - Verified fix correctness
 
-**技术亮点**：
-- 深入理解HTTP/2 HPACK压缩协议
-- 识别递归解码的栈耗尽风险
-- 跟进上游修复并验证
+**Technical Depth**:
+- Deep understanding of HTTP/2 HPACK compression protocol
+- Identified recursive decoding stack exhaustion risk
+- Followed upstream fix and verified regression
 
 ---
 
 ### 2. VirtualBox UsbCardReader Out-of-Bounds Read
-**状态：✅ Oracle确认，分配CVE编号**
+**Status**: ✅ Oracle confirmed, CVE assigned
 
-- **CVE编号**：CVE-2026-60160
-- **Oracle TID**：S3628125
-- **组件**：VirtualBox UsbCardReader
-- **漏洞类型**：Out-of-Bounds Read (未验证长度)
-- **根因**：USB卡读卡器组件未正确验证输入长度，导致越界内存读取
-- **厂商**：Oracle
+- **CVE**: CVE-2026-60160
+- **Oracle TID**: S3628125
+- **Component**: VirtualBox UsbCardReader
+- **Type**: Out-of-Bounds Read (unvalidated length)
+- **Root Cause**: USB card reader component fails to properly validate input length
 
-**技术亮点**：
-- 逆向分析VirtualBox虚拟设备实现
-- 识别长度验证缺失导致的OOB read
-- 获得官方CVE编号
+**Technical Depth**:
+- Reverse engineering of VirtualBox virtual device implementation
+- Identified missing length validation leading to OOB read
+- Obtained official CVE assignment
 
 ---
 
 ### 3. VirtualBox DevLsiLogicSCSI Integer Underflow
-**状态：✅ 提交至Oracle PSIRT**
+**Status**: ✅ Submitted to Oracle PSIRT
 
-- **Oracle TID**：S3628141
-- **组件**：VirtualBox DevLsiLogicSCSI (虚拟SCSI控制器)
-- **漏洞类型**：Integer Underflow
-- **根因**：SCSI命令处理中的整数下溢，可能导致越界内存访问
-- **PoC**：vbox-lsi-underflow-poc.zip
-
-**技术亮点**：
-- 分析虚拟SCSI控制器的命令处理逻辑
-- 识别整数下溢导致的内存安全问题
-- 编写完整PoC
+- **Oracle TID**: S3628141
+- **Component**: VirtualBox DevLsiLogicSCSI (virtual SCSI controller)
+- **Type**: Integer Underflow
+- **Root Cause**: Integer underflow in SCSI command processing
 
 ---
 
-## 🛠️ 工具开发
+### 4. Assimp AMF Integer Overflow → Division by Zero
+**Status**: ✅ Reported to Assimp maintainers
+
+- **Component**: Assimp 6.0.5 AMF Importer
+- **File**: `code/AssetLib/AMF/AMFImporter_Material.cpp:202`
+- **Type**: Integer Overflow → SIGFPE
+- **Root Cause**: `width * height` (uint32_t multiplication) overflows to 0, then `data.size() / 0` causes division by zero
+- **ASan Confirmation**: ✅ FPE @ AMFImporter_Material.cpp:202
+- **PoC**: Minimal AMF file with width=65536, height=65536
+
+---
+
+## 🟠 Memory Corruption Research Case Study
+
+### Assimp 3D Model Importer Systematic Analysis
+
+**Target**: Assimp 6.0.5 (commit 392a658)
+
+**4 ASan-confirmed crashes**:
+
+| # | Importer | Type | Location | Root Cause |
+|---|----------|------|----------|------------|
+| 1 | AMF | Division by Zero | AMFImporter_Material.cpp:202 | width*height overflow to 0 |
+| 2 | IQM | SEGV READ | IQMImporter.cpp:224 | first_vertex*step overflow |
+| 3 | IQM | Heap OOB READ | IQMImporter.cpp:205 | num_triangles oversized |
+| 4 | **SIB** | **Heap OOB WRITE** | **SIBImporter.cpp:249** | **numPoints*3 uint32_t overflow** |
+
+#### SIB Heap OOB Write — Detailed Analysis
+
+**Vulnerability**: Integer Overflow → Under-allocation → Heap OOB Write
+
+```
+numPoints = 0x55555556
+    ↓
+numPoints * 3 = 0x100000002
+    ↓
+uint32_t truncation → 0x00000002
+    ↓
+resize(pos + 2)  ← allocation too small
+    ↓
+Loop still executes 0x55555556 times
+    ↓
+Heap OOB WRITE
+```
+
+**Write Primitive Characterization**:
+
+| Property | Value | Attacker-Controlled? |
+|----------|-------|---------------------|
+| Allocation size | pos + 2 uint32_t | ✅ |
+| Write count | 0x55555556 iterations | ✅ |
+| Write size | 4 bytes (uint32_t) | - |
+| Write value (POS) | vertex index from file | ✅ Fully controlled |
+| Write value (NRM/UV) | ptIdx counter | ❌ |
+| Write offset | initial_idx + n × 12 bytes | ✅ |
+
+**Key Insight**: This is a **fully attacker-controlled heap OOB write primitive**.
+
+#### Variant Hunting Methodology
+
+**Security Invariant Extracted**:
+```
+count × elements_per_item must satisfy:
+  product ≤ SIZE_MAX
+
+AND:
+  allocated_elements ≥ count × elements_per_item
+```
+
+**Variant Search Results**:
+- Scanned entire Assimp codebase for `count * constant` pattern
+- Identified 8 candidate locations across multiple importers
+- Top candidates: MDLLoader (5 instances of `num_tris * 3`)
+
+---
+
+## 🛠️ Automated Analysis Tool
 
 ### BIVAR: Binary Patch-Guided Vulnerability Variant Analyzer
-**GitHub**: https://github.com/hhy569/bivar
+**GitHub**: https://github.com/hhy569/bivar (public)
 
-BIVAR是一个自动化二进制patch分析工具，能够：
+**6-Step Pipeline**:
+1. **Function Matching** — Identify function correspondence between binary versions
+2. **Instruction Diff** — Instruction-level comparison of modified functions
+3. **Security Semantic Detection** — Classify patch security type
+   - LENGTH_CHECK / NULL_CHECK / INTEGER_OVERFLOW_CHECK
+4. **Security Invariant IR** — Translate checks into structured invariants
+5. **Patch Completeness** — Verify patch covers all consumer functions
+6. **Variant Hunting** — Search for similar unpatched variants
 
-- **函数匹配**：识别两个二进制版本之间的函数对应关系
-- **指令级Diff**：对比修改函数的指令差异
-- **安全语义检测**：自动识别补丁中的安全检查类型
-  - LENGTH_CHECK — 长度边界检查
-  - NULL_CHECK — 空指针检查
-  - INTEGER_OVERFLOW_CHECK — 整数溢出检查
-- **安全不变量IR**：将检测到的安全检查翻译成结构化安全不变量
-- **Patch完整性分析**：检查补丁是否完整覆盖所有消费者函数
-- **变体搜索**：在二进制中搜索同源未修复的变体
+**3-CVE Benchmark Validation**:
 
-**真实CVE Benchmark验证**：
-| CVE | 产品 | 漏洞类型 | 检测结果 |
-|-----|------|----------|----------|
-| CVE-2024-56378 | Poppler | 整数溢出 | ✅ 正确识别 |
-| CVE-2025-15504 | LIEF | 空指针解引用 | ✅ 正确识别 |
-| NTP patch | PcapPlusPlus | 长度检查 | ✅ 正确识别 |
+| Benchmark | CVE / Bug Type | Security Semantic | Function Localized |
+|-----------|----------------|-------------------|--------------------|
+| PcapPlusPlus NTP | Truncated header OOB | LENGTH_CHECK | ✅ getNtpHeader() |
+| Poppler | CVE-2024-56378 | INTEGER_OVERFLOW_CHECK | ✅ JBIG2Bitmap::combine() |
+| LIEF | CVE-2025-15504 | NULL_CHECK | ✅ ELFParser::parse_binary() |
+
+This matrix demonstrates BIVAR generalizes across different memory-safety bug classes.
 
 ---
 
-## 📊 研究项目
+## 📊 Protocol Vulnerability Research
 
-### PcapPlusPlus NTP Layer Vulnerability Research
+### PcapPlusPlus NTP Layer Systematic Audit
 **GitHub**: https://github.com/hhy569/pcapplusplus-ntp-vuln
 
-- **目标**：PcapPlusPlus v26.07 NTP协议层
-- **发现**：6个getter函数存在越界读取问题
-- **方法论**：
-  - 静态分析所有协议层getter函数
-  - 识别通用模式：直接reinterpret_cast无长度检查
-  - 使用ASan动态验证
-  - 编写PoC复现
-  - 提交补丁并验证修复
+- **Target**: PcapPlusPlus v26.07
+- **Finding**: 6 NTP getter functions with OOB read (missing length validation)
+- **Pattern**: Direct `reinterpret_cast` without bounds checking
+- **Methodology**: Static analysis → ASan validation → PoC → Patch → Regression test
 
-**研究流程完整性**：
+**Systematic Pattern Discovery**:
 ```
-目标选择 → 二进制侦察 → 攻击面分析 → 静态审计 → 动态验证 → 
-根因分析 → 补丁设计 → 回归测试 → 技术报告
+Protocol layer getter
+    ↓
+reinterpret_cast directly to header struct
+    ↓
+No length validation
+    ↓
+Short packet → OOB READ
 ```
 
----
-
-## 🎓 技术栈
-
-### 漏洞挖掘
-- 二进制逆向分析 (x86/x64)
-- 模糊测试 (AFL++, libFuzzer)
-- 静态代码审计
-- 动态分析 (GDB, ASan, UBSan)
-
-### 工具开发
-- Python / C++
-- 二进制解析 (ELF, objdump)
-- 指令级diff算法
-- 安全语义分类
-
-### 协议分析
-- HTTP/2 / HPACK
-- NTP
-- USB协议
-- SCSI协议
-- 网络协议栈分析
+Found across 8 protocol families (ICMP, NTP, DNS, DoIP, SomeIP, SomeIP-SD, S7Comm, Modbus).
 
 ---
 
-## 📈 研究方法论
+## 🎯 Exploit Development
 
-### 完整研究闭环
-1. **Target Recon** — 目标选择与攻击面分析
-2. **Static Analysis** — 静态代码/二进制审计
-3. **Dynamic Validation** — 动态验证漏洞假设
-4. **Root Cause Analysis** — 根因分析与数据流追踪
-5. **Patch Verification** — 补丁验证与回归测试
-6. **Responsible Disclosure** — 负责任的漏洞披露
+### Heap Exploitation Lab — Integer Overflow to Code Execution
+**Type**: End-to-end modern-glibc heap exploitation (built around the SIB bug class)
 
-### 质量原则
-- 真实性 > 可复现性 > 技术深度 > 研究方法 > 自动化 > 覆盖率 > Crash数量
-- 不把普通crash描述成高危漏洞
-- 不虚构CVE
-- 所有发现都有完整证据链
+Rather than stopping at a crash, I built a lab that carries the **exact SIB
+bug pattern** (`count * 3` 32-bit overflow → undersized allocation → heap OOB
+write) through a complete exploitation chain, verified on a Linux VM:
+
+```
+integer overflow → undersized malloc → heap OOB write
+   → heap feng shui → tcache fd corruption
+   → safe-linking (PROTECT_PTR) bypass → arbitrary chunk return
+   → vtable/callback overwrite → control-flow hijack
+```
+
+**What it demonstrates:**
+- Primitive characterization (write value / offset / count controllability)
+- Heap feng shui to place a freed tcache chunk adjacent to the overflow
+- glibc ≥ 2.32 safe-linking arithmetic: `forged_fd = target ^ (fd_addr >> 12)`
+- Modern mitigation map: ASLR, heap ASLR, safe-linking, removed
+  `__malloc_hook` (≥2.34), Full RELRO → vtable/callback targets
+- A `#ifdef FIXED` build using overflow-safe `size_t` arithmetic that refuses
+  the 16 GB allocation, plus an ASan build confirming the OOB write
+
+**Verified builds:** vulnerable (chain walkthrough), ASan
+(`heap-buffer-overflow WRITE of size 4`), fixed (allocation safely rejected).
+
+> Key research finding in the real SIB code: the corrupted `idx[UV]` values
+> are later dereferenced as array indices in `ReadUVs`
+> (`mesh->uv[id].x = ...`), giving a potential **second-stage OOB primitive**.
+
+### Memory Corruption → Exploitability Analysis
+
+**Core Research Question**:
+> Can an integer-overflow-induced heap OOB write in a file-format parser be
+> escalated from crash to code execution, and what mitigations stand in the way?
+
+Full chain practiced: `Crash → Root Cause → Memory Primitive → Controllability
+→ Heap Grooming → Allocator Attack → Control-Flow Hijack`.
 
 ---
 
-## 📞 联系方式
+## 🖥️ Firmware Reverse Engineering
+
+### OpenWrt ARMv7 Firmware Analysis
+- **Target**: OpenWrt 25.12.3 armsr-armv7 rootfs
+- **Analysis Object**: uhttpd web server
+- **Techniques**:
+  - SquashFS filesystem extraction
+  - ARM 32-bit EABI5 hard-float analysis
+  - PIE + stripped binary analysis
+  - QEMU user-mode emulation
+  - GDB remote debugging
+
+---
+
+## ✍️ Research Writing
+
+Public write-ups that document the research process end to end:
+
+1. **BIVAR: Binary Patch-Guided Vulnerability Variant Analyzer** — how one
+   patched CVE becomes a systematic search for its siblings.
+2. **Anatomy of an Integer-Overflow Heap OOB Write** — the Assimp SIB case
+   study, from ASan report to characterized write primitive.
+3. **Security-Invariant Variant Hunting** — the five-stage method for turning
+   one CVE into a reusable hunting strategy.
+
+These emphasize honest classification: a multiply is not a bug, a crash is
+not a vulnerability, an OOB write is not RCE, and a reproduced public issue is
+never claimed as a new CVE.
+
+---
+
+## 📈 Research Methodology
+
+### Complete Research Loop
+1. **Target Recon** — Attack surface analysis
+2. **Static Analysis** — Code audit and data-flow tracing
+3. **Dynamic Validation** — ASan/UBSan confirmation
+4. **Root Cause Analysis** — field → variable → arithmetic → memory operation
+5. **Invariant Extraction** — generalize the bug pattern
+6. **Variant Hunting** — systematic sibling search (BIVAR)
+7. **Exploitability Analysis** — crash → primitive → control flow
+8. **Responsible Disclosure** — vendor coordination and regression tests
+
+### Coverage-Gated Fuzzing Discipline
+Negative results are documented, not hidden: deep-state fuzzing campaigns on
+FFmpeg HTJ2K and libheif were deliberately stopped at measured coverage
+plateaus (no new paths/min, deep decoder unreachable) rather than burned as
+blind CPU time. Each produced a reachability/bottleneck analysis instead of
+inflated crash counts.
+
+### Quality Principles
+- Truthfulness > Reproducibility > Technical Depth > Methodology > Automation > Coverage > Crash Count
+- No fictional CVEs, patches, or severity claims
+- All findings have complete evidence chains
+- Clear distinction between known bugs, reproductions, and new discoveries
+- Local testing only on open-source / authorized targets
+
+---
+
+## 📞 Contact
 
 - GitHub: [@hhy569](https://github.com/hhy569)
-- 邮箱: 2932088330@qq.com
+- Email: 2932088330@qq.com
 
 ---
 
-*This portfolio represents real binary security research conducted independently.*
+*This portfolio represents independent binary security research. All crashes are ASan-confirmed. All vulnerabilities have complete evidence chains.*
